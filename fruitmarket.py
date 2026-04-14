@@ -1,17 +1,8 @@
 """
-EXERCISE: Multi-Agent State Management with Purchase Tracking
+SOLUTION: Transaction History State Management
 
-In this exercise, you'll extend the Colombian Fruit Market system by implementing
-purchase tracking functionality while maintaining the multi-agent orchestration patterns.
-
-You'll need to:
-1. Implement the purchase_fruit tool to record transactions
-2. Implement get_purchase_summary tool for analytics
-3. Add the purchase summary tool to the PurchaseAgent
-4. Add 'summary' action support to the orchestrator's handle_purchase tool
-
-This demonstrates extending multi-agent systems with new capabilities while
-maintaining proper orchestration patterns.
+This solution implements the purchase history tracking feature for the
+Colombian Fruit Market system, demonstrating state management for e-commerce transactions.
 """
 
 from typing import Dict, List, Any
@@ -27,7 +18,7 @@ from smolagents import (
     tool,
 )
 
-dotenv.load_dotenv(dotenv_path="../.env")
+dotenv.load_dotenv(dotenv_path=".env")
 openai_api_key = os.getenv("UDACITY_OPENAI_API_KEY")
 
 model = OpenAIServerModel(
@@ -112,7 +103,6 @@ def save_user_state(user_id: str) -> str:
     """
     return f"User state for {user_id} saved successfully."
 
-# TODO: Implement this tool to record fruit purchases
 @tool
 def purchase_fruit(user_id: str, fruit_name: str, quantity: int) -> str:
     """Records a fruit purchase in the user's purchase history.
@@ -125,8 +115,28 @@ def purchase_fruit(user_id: str, fruit_name: str, quantity: int) -> str:
     Returns:
         A confirmation message with purchase details.
     """
-    # TODO: Implement purchase recording with timestamps and pricing
-    pass
+    if fruit_name not in fruit_data:
+        return f"Sorry, we don't have {fruit_name} available for purchase."
+    
+    price_per_unit = fruit_data[fruit_name]["price"]
+    total_cost = price_per_unit * quantity
+    
+    purchase_record = {
+        "timestamp": datetime.now().isoformat(),
+        "fruit_name": fruit_name,
+        "quantity": quantity,
+        "price_per_unit": price_per_unit,
+        "total_cost": total_cost
+    }
+    
+    if user_id not in user_states:
+        user_states[user_id] = {"preferences": [], "purchases": []}
+    elif "purchases" not in user_states[user_id]:
+        user_states[user_id]["purchases"] = []
+    
+    user_states[user_id]["purchases"].append(purchase_record)
+    
+    return f"Purchase recorded: {quantity} {fruit_name}(s) for ${total_cost:.2f} (${price_per_unit:.2f} each)"
 
 @tool
 def get_purchase_history(user_id: str) -> List[Dict]:
@@ -145,7 +155,6 @@ def get_purchase_history(user_id: str) -> List[Dict]:
     
     return user_states[user_id]["purchases"]
 
-# TODO: Implement this tool for purchase analytics
 @tool
 def get_purchase_summary(user_id: str) -> Dict:
     """Calculates a summary of the user's purchase history.
@@ -157,8 +166,33 @@ def get_purchase_summary(user_id: str) -> Dict:
         A dictionary containing the total spent, number of transactions, 
         and most purchased fruit.
     """
-    # TODO: Implement purchase summary calculation
-    pass
+    purchases = get_purchase_history(user_id)
+    
+    total_spent = 0
+    num_transactions = len(purchases)
+    fruit_counts = Counter()
+    total_fruits_purchased = 0
+    
+    for purchase in purchases:
+        total_spent += purchase["total_cost"]
+        fruit_counts[purchase["fruit_name"]] += purchase["quantity"]
+        total_fruits_purchased += purchase["quantity"]
+    
+    most_purchased_fruit = None
+    most_purchased_count = 0
+    
+    for fruit, count in fruit_counts.items():
+        if count > most_purchased_count:
+            most_purchased_fruit = fruit
+            most_purchased_count = count
+    
+    return {
+        "total_spent": total_spent,
+        "num_transactions": num_transactions,
+        "most_purchased_fruit": most_purchased_fruit,
+        "most_purchased_count": most_purchased_count if most_purchased_fruit else 0,
+        "total_fruits_purchased": total_fruits_purchased
+    }
 
 # Specialized agents with real responsibilities
 
@@ -189,7 +223,7 @@ class PurchaseAgent(ToolCallingAgent):
     
     def __init__(self, model: OpenAIServerModel):
         super().__init__(
-            tools=[purchase_fruit, get_purchase_history],  # TODO: Add get_purchase_summary
+            tools=[purchase_fruit, get_purchase_history, get_purchase_summary],
             model=model,
             name="purchase_agent",
             description="Handles fruit purchases, purchase history, and purchase summaries.",
@@ -240,7 +274,7 @@ class Orchestrator(ToolCallingAgent):
 
         @tool
         def handle_purchase(user_id: str, action: str, fruit_name: str = None, quantity: int = None) -> str:
-            """Handle purchase operations including buying fruits and viewing history.
+            """Handle purchase operations including buying fruits, viewing history, and getting summaries.
             
             Args:
                 user_id: ID of the user
@@ -255,7 +289,8 @@ class Orchestrator(ToolCallingAgent):
                 return self.purchases.run(f"Record purchase for user {user_id}: {quantity} {fruit_name}")
             elif action == "history":
                 return self.purchases.run(f"Get purchase history for user {user_id}")
-            # TODO: Add support for action == "summary"
+            elif action == "summary":
+                return self.purchases.run(f"Get purchase summary for user {user_id}")
             return "Invalid purchase action"
 
         super().__init__(
@@ -335,6 +370,8 @@ def run_demo():
         print(f"Agent: {response}")
         time.sleep(0.5)
     
+    new_orchestrator = Orchestrator(model)
+    
     print("\n--- Continuing in New Session ---")
     
     new_messages = [
@@ -346,22 +383,25 @@ def run_demo():
     
     for message in new_messages:
         print(f"\nUser: {message}")
-        response = orchestrator.process_user_message(user_id, message)
+        response = new_orchestrator.process_user_message(user_id, message)
         print(f"Agent: {response}")
         time.sleep(0.5)
     
     # Final state check - display purchase history and summary
     purchase_history = get_purchase_history(user_id)
-    # TODO: Uncomment when get_purchase_summary is implemented
-    # purchase_summary = get_purchase_summary(user_id)
+    purchase_summary = get_purchase_summary(user_id)
     
     print("\n" + "="*70)
     print("Final Purchase History:")
     for i, purchase in enumerate(purchase_history):
-        print(f"  {i+1}. [Purchase details will show when purchase_fruit is implemented]")
+        print(f"  {i+1}. {purchase['quantity']} {purchase['fruit_name']}(s) for ${purchase['total_cost']:.2f} on {purchase['timestamp'].split('T')[0]}")
     
     print("\nPurchase Summary:")
-    print("  [Summary will show when get_purchase_summary is implemented]")
+    print(f"  - Total spent: ${purchase_summary['total_spent']:.2f}")
+    print(f"  - Number of transactions: {purchase_summary['num_transactions']}")
+    print(f"  - Total fruits purchased: {purchase_summary['total_fruits_purchased']}")
+    if purchase_summary['most_purchased_fruit']:
+        print(f"  - Most purchased fruit: {purchase_summary['most_purchased_fruit']} ({purchase_summary['most_purchased_count']} units)")
     
     print("\n" + "="*70)
     print("Demo complete! This demonstrates state persistence and transaction tracking across sessions.")
